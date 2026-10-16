@@ -32,7 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // File Upload Drag & Drop Logic
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
-    const browseBtn = dropZone.querySelector('.btn-outline');
+    const browseBtn = dropZone ? dropZone.querySelector('.btn-outline') : null;
+    
 
     if (browseBtn && fileInput && dropZone) {
         browseBtn.addEventListener('click', () => {
@@ -110,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Close dropdown when clicking anywhere else
         document.addEventListener('click', () => {
+            
             if (profileDropdown) profileDropdown.style.display = 'none';
         });
 

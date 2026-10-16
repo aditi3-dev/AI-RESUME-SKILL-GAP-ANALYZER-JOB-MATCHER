@@ -8,14 +8,21 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 
 app = Flask(__name__)
-# Allow CORS only from Live Server port 5503
-CORS(app, origins=["http://127.0.0.1:5503", "http://localhost:5503"])
+# Allow the local frontend to connect to Flask
+CORS(app, origins=[
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+    "http://127.0.0.1:5503",
+    "http://localhost:5503"
+])
 
 # Load JSON skills database
 def load_skills_data():
@@ -199,58 +206,100 @@ def skill_gap():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 
+
+
 def get_groq_role_predictions(resume_text):
-    if not GROQ_API_KEY or "your_" in GROQ_API_KEY:
-        return [{"role": "API Key Not Loaded", "match_percentage": 0, "reasoning": "Please ensure you have saved your .env file and restarted the python app.py server to load the new key.", "tags": ["Error", "Env", "Restart"]}]
-        
+    if not GROQ_API_KEY:
+        return [{
+            "role": "API Key Missing",
+            "match_percentage": 0,
+            "reasoning": "Please add GROQ_API_KEY to your .env file and restart the server.",
+            "tags": []
+        }]
+
     url = "https://api.groq.com/openai/v1/chat/completions"
+
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    prompt = f"""
-    You are an expert AI Career Coach. Analyze the following candidate experience/skills extracted from a resume. Predict ALL the potential job roles the candidate is eligible for based on their skillset. Provide a comprehensive and lengthy list of as many roles as are highly or moderately suitable.
-    For each role, provide a match percentage (0-100), a short reasoning (max 2 sentences explaining why they are eligible based on their exact experience), and 3 key technology/skill tags.
-    Output ONLY valid parseable JSON in this exact structure, with no markdown formatting or setup words:
-    [
-      {{"role": "Role Name", "match_percentage": 95, "reasoning": "Why they fit...", "tags": ["Skill1", "Skill2", "Skill3"]}}
-    ]
 
-    Resume Text:
-    {resume_text[:3000]}
+    prompt = f"""
+    Analyze this resume and suggest the 3 most suitable entry-level job roles.
+    Return ONLY a valid JSON array. Each item must have:
+    - role: job title
+    - match_percentage: integer from 0 to 100
+    - reasoning: short explanation based on the resume
+    - tags: array of relevant skills
+
+    Resume:
+    {resume_text}
+
+    Example format:
+    [
+      {{
+        "role": "Python Developer",
+        "match_percentage": 85,
+        "reasoning": "The resume shows Python programming skills.",
+        "tags": ["Python", "SQL"]
+      }}
+    ]
     """
-    
-    data = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3
-    }
-    
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        if response.status_code == 200:
-            result = response.json()
-            content = result["choices"][0]["message"]["content"]
-            # Clean up potential markdown formatting from LLM
-            content = content.replace("```json", "").replace("```", "").strip()
-            return json.loads(content)
-        else:
-            print("Groq API Error:", response.text)
-    except Exception as e:
-        print("Groq API Execution Error:", str(e))
-        
-    # Fallback if parsing fails totally
-    return [
+
+    payload = {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
             {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.2
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+
+        print("Groq API status:", response.status_code, flush=True)
+
+        if response.status_code != 200:
+            print("Groq API error:", response.text, flush=True)
+            return [{
                 "role": "Groq API Error",
                 "match_percentage": 0,
-                "reasoning": "The AI API could not execute. This could be due to quota limits or an invalid API token key. Please check your python terminal for the exact error log.",
-                "tags": ["Groq", "API", "Error"]
-            }
-    ]
+                "reasoning": "Check the VS Code terminal for the Groq API error.",
+                "tags": []
+            }]
+
+        result = response.json()
+        content = result["choices"][0]["message"]["content"]
+        content = content.strip()
+
+        if content.startswith("```"):
+            content = content.replace("```json", "", 1)
+            content = content.replace("```", "").strip()
+
+        predictions = json.loads(content)
+        return predictions
+
+    except Exception as e:
+        print("Groq prediction error:", str(e), flush=True)
+        return [{
+            "role": "Prediction Error",
+            "match_percentage": 0,
+            "reasoning": "Could not process the AI response. Check the VS Code terminal.",
+            "tags": []
+        }]
+
 
 @app.route('/api/predict-roles', methods=['POST'])
 def predict_roles():
+    # print("PREDICT ROLES ROUTE HIT", flush=True)
     if 'resume' not in request.files:
         return jsonify({"success": False, "message": "No resume file attached."})
     
@@ -262,6 +311,7 @@ def predict_roles():
         resume_text = extract_text_from_pdf(file)
         
         # Call Groq API for insights
+        # print("PREDICT ROLES FUNCTION CALLED")
         predictions = get_groq_role_predictions(resume_text)
 
         return jsonify({
